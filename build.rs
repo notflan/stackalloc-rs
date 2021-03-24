@@ -15,7 +15,7 @@ fn build_tramp()
 	.opt_level(3)
 	.flag_if_supported("-flto")
 
- 	// Not sure if we want these two. We can check the codegen later
+ 	// Not sure if we want these two. We can check the codegen later.
 	.pic(false)
 	.use_plt(false)
 	
