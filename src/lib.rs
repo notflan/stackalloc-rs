@@ -9,19 +9,32 @@ mod tests {
     {
 	use std::ffi::c_void;
 
-	let mut size: usize = 100;
-	extern "C" fn callback(ptr: *mut c_void, data: *mut c_void)
-	{
-	    let size = unsafe {&mut *(data as *mut usize)};
-	    println!("From callback! Size is {}", *size);
+	let size: usize = 100;
+	let output = {
+	    let mut size: usize = size;
+	    extern "C" fn callback(ptr: *mut c_void, data: *mut c_void)
+	    {
+		let size = unsafe {&mut *(data as *mut usize)};
+		let slice = unsafe {
+		    std::ptr::write_bytes(ptr, 0, *size);
+		    std::slice::from_raw_parts_mut(ptr as *mut u8, *size)
+		};
+		println!("From callback! Size is {}", slice.len());
 
-	    *size = 0;
-	}
+		for (i, x) in (0..).zip(slice.iter_mut())
+		{
+		    *x = i as u8;
+		}
 
-	unsafe {
-	    super::ffi::alloca_trampoline(size, callback, &mut size as *mut usize as *mut _);
-	}
+		*size = slice.iter().map(|&x| x as usize).sum::<usize>();
+	    }
 
-	assert_eq!(size, 0);
+	    unsafe {
+		super::ffi::alloca_trampoline(size, callback, &mut size as *mut usize as *mut _);
+	    }
+	    size
+	};
+
+	assert_eq!(output, (0..size).sum::<usize>());
     }
 }
