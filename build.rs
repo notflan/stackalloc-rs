@@ -7,7 +7,6 @@ fn build_tramp()
     let mut builder = cc::Build::new();
     // --std=c99 -W -Wall -Werror -pedantic -O3 -flto
     builder.flag("--std=c99")
-	.flag("--std=c99")
 	.flag("-W")
 	.flag("-Wall")
 	.flag("-Werror")
