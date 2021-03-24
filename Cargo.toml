@@ -1,6 +1,7 @@
 [package]
 name = "stackalloc"
 version = "0.1.0"
+description = "allocate arbitrary bytes on the stack at runtime"
 authors = ["Avril <flanchan@cumallover.me>"]
 edition = "2018"
 
