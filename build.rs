@@ -14,6 +14,10 @@ fn build_tramp()
 	.flag("-pedantic")
 	.opt_level(3)
 	.flag_if_supported("-flto")
+
+ 	// Not sure if we want these two. We can check the codegen later
+	.pic(false)
+	.use_plt(false)
 	
 	.file("alloca_trampoline_.c")
 	.compile("calloca_trampoline");
