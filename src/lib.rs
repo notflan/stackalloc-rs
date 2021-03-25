@@ -1,4 +1,12 @@
+//! # Safe runtime stack allocations
+//!
+//! Provides methods for Rust to access and use runtime stack allocated buffers in a safe way.
+
+#![cfg_attr(nightly, feature(test))] 
+
 #![allow(dead_code)]
+
+#[cfg(nightly)] extern crate test;
 
 use std::{
     mem::{
@@ -15,7 +23,45 @@ use std::{
 
 mod ffi;
 
-pub fn with_alloca<T, F>(size: usize, callback: F) -> T
+/// Allocate a runtime length byte buffer (uninitialised) on the stack.
+///
+/// Call the closure with a stack allocated buffer of `MaybeUninit<u8>` on the caller's frame of `size`. The memory is popped off the stack regardless of how the function returns (unless it doesn't return at all.)
+///
+/// # Notes
+/// The buffer is allocated on the closure's caller's frame, and removed from the stack immediately after the closure returns (including a panic, or even a `longjmp()`).
+///
+/// # Panics
+/// If the closure panics, the panic is propagated after cleanup of the FFI call stack.
+///
+/// # Safety
+/// While this function *is* safe to call from safe Rust, allocating arbitrary stack memory has drawbacks.
+///
+/// ## Stack overflow potential
+/// It is possible to cause a stack overflow if the buffer you allocate is too large. (This is possible in many ways in safe Rust.)
+/// To avoid this possibility, generally only use this for small to medium size buffers of only runtime-known sizes (in the case of compile-time known sizes, use arrays. For large buffers, use `Vec`). The stack size can vary and what a safe size to `alloca` is can change throughout the runtime of the program and depending on the depth of function calls, but it is usually safe to do this.
+/// However, **do not** pass unvalidated input sizes (e.g. read from a socket or file) to this function, that is a sure way to crash your program.
+///
+/// This is not undefined behaviour however, it is just a kind of OOM and will terminate execution of the program.
+///
+/// ## 0 sizes
+/// If a size of 0 is passed, then a non-null, non-aliased, and properly aligned dangling pointer on the stack is used to construct the slice. This is safe and there is no performance difference (other than no allocation being performed.)
+///
+/// ## Initialisation
+/// The stack buffer is not explicitly initialised, so the slice's elements are wrapped in `MaybeUninit`. The contents of uninitialised stack allocated memory is *usually* 0.
+///
+/// ## Cleanup
+/// Immediately after the closure exits, the stack pointer is reset, effectively freeing the buffer. The pointer used for the creation of the slice is invalidated as soon as the closure exits. But in the absense of `unsafe` inside the closure, it isn't possible to keep this pointer around after the frame is destroyed.
+///
+/// ## Panics
+/// The closure can panic and it will be caught and propagated after exiting the FFI boundary and resetting the stack pointer.
+///
+/// # Internals
+/// This function creates a shim stack frame (by way of a small FFI function) and uses the same mechanism as a C VLA to extend the stack pointer by the size provided (plus alignment). Then, this pointer is passed to the provided closure, and after the closure returns to the shim stack frame, the stack pointer is reset to the base of the caller of this function.
+///
+/// ## Inlining
+/// In the absense of inlining LTO (which *is* enabled if possible), this funcion is safe to inline without leaking the `alloca`'d memory into the caller's frame; however it is prevented for doing so in case the FFI call gets inlined into this function call.
+#[inline(never)]
+pub fn bytes<T, F>(size: usize, callback: F) -> T
 where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 {
     let mut callback = ManuallyDrop::new(callback);
@@ -57,12 +103,18 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 #[cfg(test)]
 mod tests {
     #[test]
+    #[should_panic]
+    fn unwinding_over_boundary()
+    {
+	super::bytes(120, |_buf| panic!());
+    }
+    #[test]
     fn with_alloca()
     {
 	use std::mem::MaybeUninit;
 	
 	const SIZE: usize = 128;
-	let sum = super::with_alloca(SIZE, |buf| {
+	let sum = super::bytes(SIZE, |buf| {
 
 	    println!("Buffer size is {}", buf.len());
 	    for (i, x) in (1..).zip(buf.iter_mut()) {
@@ -107,5 +159,28 @@ mod tests {
 	};
 
 	assert_eq!(output, (0..size).sum::<usize>());
+    }
+
+    #[cfg(nightly)]
+    mod bench
+    {
+	const SIZE: usize = 1024;
+	use test::{black_box, Bencher};
+	use std::mem::MaybeUninit;
+
+	#[bench]
+	fn vec_of_uninit_bytes_known(b: &mut Bencher)
+	{
+	    b.iter(|| {
+		black_box(vec![MaybeUninit::<u8>::uninit(); SIZE]);
+	    })
+	}
+	#[bench]
+	fn stackalloc_of_uninit_bytes_known(b: &mut Bencher)
+	{
+	    b.iter(|| {
+		black_box(crate::bytes(SIZE, |b| {black_box(b);}));
+	    })
+	}
     }
 }
