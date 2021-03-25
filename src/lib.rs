@@ -23,7 +23,7 @@ use std::{
 
 mod ffi;
 
-/// Allocate a runtime length byte buffer (uninitialised) on the stack.
+/// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
 /// Call the closure with a stack allocated buffer of `MaybeUninit<u8>` on the caller's frame of `size`. The memory is popped off the stack regardless of how the function returns (unless it doesn't return at all.)
 ///
@@ -61,7 +61,7 @@ mod ffi;
 /// ## Inlining
 /// In the absense of inlining LTO (which *is* enabled if possible), this funcion is entirely safe to inline without leaking the `alloca`'d memory into the caller's frame; however, the FFI wrapper call is prevented from doing so in case the FFI call gets inlined into this function call.
 /// It is unlikely the trampoline to the `callback` closure itself can be inlined.
-pub fn bytes<T, F>(size: usize, callback: F) -> T
+pub fn alloca<T, F>(size: usize, callback: F) -> T
 where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 {
     let mut callback = ManuallyDrop::new(callback);
@@ -106,7 +106,7 @@ mod tests {
     #[should_panic]
     fn unwinding_over_boundary()
     {
-	super::bytes(120, |_buf| panic!());
+	super::alloca(120, |_buf| panic!());
     }
     #[test]
     fn with_alloca()
@@ -114,7 +114,7 @@ mod tests {
 	use std::mem::MaybeUninit;
 	
 	const SIZE: usize = 128;
-	let sum = super::bytes(SIZE, |buf| {
+	let sum = super::alloca(SIZE, |buf| {
 
 	    println!("Buffer size is {}", buf.len());
 	    for (i, x) in (1..).zip(buf.iter_mut()) {
@@ -179,7 +179,7 @@ mod tests {
 	fn stackalloc_of_uninit_bytes_known(b: &mut Bencher)
 	{
 	    b.iter(|| {
-		black_box(crate::bytes(SIZE, |b| {black_box(b);}));
+		black_box(crate::alloca(SIZE, |b| {black_box(b);}));
 	    })
 	}
     }
