@@ -59,8 +59,8 @@ mod ffi;
 /// This function creates a shim stack frame (by way of a small FFI function) and uses the same mechanism as a C VLA to extend the stack pointer by the size provided (plus alignment). Then, this pointer is passed to the provided closure, and after the closure returns to the shim stack frame, the stack pointer is reset to the base of the caller of this function.
 ///
 /// ## Inlining
-/// In the absense of inlining LTO (which *is* enabled if possible), this funcion is safe to inline without leaking the `alloca`'d memory into the caller's frame; however it is prevented for doing so in case the FFI call gets inlined into this function call.
-#[inline(never)]
+/// In the absense of inlining LTO (which *is* enabled if possible), this funcion is entirely safe to inline without leaking the `alloca`'d memory into the caller's frame; however, the FFI wrapper call is prevented from doing so in case the FFI call gets inlined into this function call.
+/// It is unlikely the trampoline to the `callback` closure itself can be inlined.
 pub fn bytes<T, F>(size: usize, callback: F) -> T
 where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 {
