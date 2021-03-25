@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-pub type CallbackRaw = extern "C" fn (ptr: *mut c_void, data: *mut c_void)->();
+pub type CallbackRaw = unsafe extern "C" fn (ptr: *mut c_void, data: *mut c_void)->();
 
 extern "C" {
     fn _alloca_trampoline(size: usize, cb: Option<CallbackRaw>, data: *mut c_void);
