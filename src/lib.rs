@@ -101,6 +101,10 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
     }
 }
 
+#[inline(always)] unsafe fn slice_assume_init_mut<T>(buf: &mut [MaybeUninit<T>]) -> &mut [T]
+{
+    &mut *(buf as *mut [MaybeUninit<T>] as *mut [T]) // MaybeUninit::slice_assume_init_mut()
+}
 
 /// Allocate a runtime length zeroed byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
@@ -112,7 +116,7 @@ where F: FnOnce(&mut [u8]) -> T
 	    // SAFETY: We zero-initialise the backing slice
 	    callback(unsafe {
 		ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len()); // buf.fill(MaybeUninit::zeroed());
-		&mut *(buf as *mut [MaybeUninit<u8>] as *mut [u8]) // MaybeUninit::slice_assume_init_mut()
+		slice_assume_init_mut(buf)
 	    })
 	})
 }
@@ -126,7 +130,7 @@ where F: FnOnce(&mut [u8]) -> T
 /// Allocate a runtime length slice of uninitialised `T` on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
 /// See `alloca()`.
-#[inline] pub fn stackalloc<T, U, F>(size: usize, callback: F) -> U
+#[inline] pub fn stackalloc_uninit<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [MaybeUninit<T>]) -> U
 {
     let size = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
@@ -138,13 +142,37 @@ where F: FnOnce(&mut [MaybeUninit<T>]) -> U
     })
 }
 
-/* note to self: aligning buffers manually:
+/// Allocate a runtime length slice of `T` on the stack, fill it by cloning `init`, call `callback` with this buffer, and then deallocate the buffer.
+#[inline] pub fn stackalloc<T, U, F>(size: usize, init: T, callback: F) -> U
+where F: FnOnce(&mut [T]) -> U,
+T: Clone
+{
+    stackalloc_uninit(size, move |buf| {
+	buf.fill_with(move || MaybeUninit::new(init.clone()));
+	// SAFETY: We have initialised the buffer above
+	callback(unsafe { slice_assume_init_mut(buf) })
+    })
+}
 
-char buffer[sizeof(T) + alignof(T)];
-char* aligned_buffer = buffer + alignof(T) - reinterpret_cast<intptr_t>(buffer) % alignof(T);
-T* object = new (aligned_buffer) T;
+/// Allocate a runtime length slice of `T` on the stack, fill it by calling `init_with`, call `callback` with this buffer, and then deallocate the buffer.
+#[inline] pub fn stackalloc_with<T, U, F, I>(size: usize, mut init_with: I, callback: F) -> U
+where F: FnOnce(&mut [T]) -> U,
+I: FnMut() -> T
+{
+    stackalloc_uninit(size, move |buf| {
+	buf.fill_with(move || MaybeUninit::new(init_with()));
+	// SAFETY: We have initialised the buffer above
+	callback(unsafe { slice_assume_init_mut(buf) })
+    })
+}
 
- */
+/// Allocate a runtime length slice of `T` on the stack, fill it by calling `T::default()`, call `callback` with this buffer, and then deallocate the buffer.
+#[inline] pub fn stackalloc_with_default<T, U, F>(size: usize, callback: F) -> U
+where F: FnOnce(&mut [T]) -> U,
+T: Default
+{
+    stackalloc_with(size, T::default, callback)
+}
 
 #[cfg(test)]
 mod tests;
