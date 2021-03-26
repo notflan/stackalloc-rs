@@ -117,5 +117,34 @@ where F: FnOnce(&mut [u8]) -> T
 	})
 }
 
+#[inline(always)] fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
+{
+    use std::mem::align_of;
+    ((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
+}
+
+/// Allocate a runtime length slice of uninitialised `T` on the stack, call `callback` with this buffer, and then deallocate the buffer.
+///
+/// See `alloca()`.
+#[inline] pub fn stackalloc<T, U, F>(size: usize, callback: F) -> U
+where F: FnOnce(&mut [MaybeUninit<T>]) -> U
+{
+    let size = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
+    alloca(size, move |buf| {
+	let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
+	unsafe {
+	    callback(slice::from_raw_parts_mut(abuf, size))
+	}
+    })
+}
+
+/* note to self: aligning buffers manually:
+
+char buffer[sizeof(T) + alignof(T)];
+char* aligned_buffer = buffer + alignof(T) - reinterpret_cast<intptr_t>(buffer) % alignof(T);
+T* object = new (aligned_buffer) T;
+
+ */
+
 #[cfg(test)]
 mod tests;
