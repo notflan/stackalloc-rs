@@ -59,6 +59,20 @@ fn raw_trampoline()
     assert_eq!(output, (0..size).sum::<usize>());
 }
 
+#[test] fn non_primitive_type()
+{
+    assert_eq!(super::stackalloc(10, String::from("Hello world"), |strings| {
+	strings.iter().cloned().collect::<String>()
+    }), std::iter::repeat(String::from("Hello world")).take(10).collect::<String>());
+}
+
+#[test] fn primitive_type()
+{
+    assert_eq!(super::stackalloc(10, 12.0, |floats| {
+	floats.iter().copied().map(|x| x / 2.0).sum::<f64>()
+    }), std::iter::repeat(12.0).take(10).map(|x| x / 2.0).sum());
+}
+
 #[cfg(nightly)]
 mod bench
 {

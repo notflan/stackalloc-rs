@@ -10,6 +10,7 @@
 
 use std::{
     mem::{
+	self,
 	MaybeUninit,
 	ManuallyDrop,
     },
@@ -101,6 +102,12 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
     }
 }
 
+#[inline(always)] fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
+{
+    use std::mem::align_of;
+    ((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
+}
+
 #[inline(always)] unsafe fn slice_assume_init_mut<T>(buf: &mut [MaybeUninit<T>]) -> &mut [T]
 {
     &mut *(buf as *mut [MaybeUninit<T>] as *mut [T]) // MaybeUninit::slice_assume_init_mut()
@@ -121,11 +128,6 @@ where F: FnOnce(&mut [u8]) -> T
 	})
 }
 
-#[inline(always)] fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
-{
-    use std::mem::align_of;
-    ((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
-}
 
 /// Allocate a runtime length slice of uninitialised `T` on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
@@ -133,24 +135,13 @@ where F: FnOnce(&mut [u8]) -> T
 #[inline] pub fn stackalloc_uninit<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [MaybeUninit<T>]) -> U
 {
-    let size = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
-    alloca(size, move |buf| {
+    let size_bytes = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
+    alloca(size_bytes, move |buf| {
 	let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
+	debug_assert!(buf.as_ptr_range().contains(&(abuf as *const _ as *const MaybeUninit<u8>)));
 	unsafe {
 	    callback(slice::from_raw_parts_mut(abuf, size))
 	}
-    })
-}
-
-/// Allocate a runtime length slice of `T` on the stack, fill it by cloning `init`, call `callback` with this buffer, and then deallocate the buffer.
-#[inline] pub fn stackalloc<T, U, F>(size: usize, init: T, callback: F) -> U
-where F: FnOnce(&mut [T]) -> U,
-T: Clone
-{
-    stackalloc_uninit(size, move |buf| {
-	buf.fill_with(move || MaybeUninit::new(init.clone()));
-	// SAFETY: We have initialised the buffer above
-	callback(unsafe { slice_assume_init_mut(buf) })
     })
 }
 
@@ -162,9 +153,27 @@ I: FnMut() -> T
     stackalloc_uninit(size, move |buf| {
 	buf.fill_with(move || MaybeUninit::new(init_with()));
 	// SAFETY: We have initialised the buffer above
-	callback(unsafe { slice_assume_init_mut(buf) })
+	let buf = unsafe { slice_assume_init_mut(buf) };
+	let ret = callback(buf);
+	if mem::needs_drop::<T>()
+	{
+	    // SAFETY: We have initialised the buffer above
+	    unsafe {
+		ptr::drop_in_place(buf as *mut _);
+	    }
+	}
+	ret
     })
 }
+
+/// Allocate a runtime length slice of `T` on the stack, fill it by cloning `init`, call `callback` with this buffer, and then deallocate the buffer.
+#[inline] pub fn stackalloc<T, U, F>(size: usize, init: T, callback: F) -> U
+where F: FnOnce(&mut [T]) -> U,
+T: Clone
+{
+    stackalloc_with(size, move || init.clone(), callback)
+}
+
 
 /// Allocate a runtime length slice of `T` on the stack, fill it by calling `T::default()`, call `callback` with this buffer, and then deallocate the buffer.
 #[inline] pub fn stackalloc_with_default<T, U, F>(size: usize, callback: F) -> U
