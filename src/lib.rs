@@ -19,8 +19,10 @@ use std::{
     },
     slice,
     ffi::c_void,
+    ptr,
 };
 
+//TODO: pub mod avec; pub use avec::AVec;
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
@@ -100,87 +102,20 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 }
 
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[should_panic]
-    fn unwinding_over_boundary()
-    {
-	super::alloca(120, |_buf| panic!());
-    }
-    #[test]
-    fn with_alloca()
-    {
-	use std::mem::MaybeUninit;
-	
-	const SIZE: usize = 128;
-	let sum = super::alloca(SIZE, |buf| {
-
-	    println!("Buffer size is {}", buf.len());
-	    for (i, x) in (1..).zip(buf.iter_mut()) {
-		*x = MaybeUninit::new(i as u8);
-	    }
-	    eprintln!("Buffer is now {:?}", unsafe { std::mem::transmute::<_, & &mut [u8]>(&buf) });
-
-	    buf.iter().map(|x| unsafe { x.assume_init() } as u64).sum::<u64>()
-	});
-
-	assert_eq!(sum, (1..=SIZE).sum::<usize>() as u64); 
-    }
-    #[test]
-    fn raw_trampoline()
-    {
-	use std::ffi::c_void;
-
-	let size: usize = 100;
-	let output = {
-	    let mut size: usize = size;
-	    extern "C" fn callback(ptr: *mut c_void, data: *mut c_void)
-	    {
-		let size = unsafe {&mut *(data as *mut usize)};
-		let slice = unsafe {
-		    std::ptr::write_bytes(ptr, 0, *size);
-		    std::slice::from_raw_parts_mut(ptr as *mut u8, *size)
-		};
-		println!("From callback! Size is {}", slice.len());
-
-		for (i, x) in (0..).zip(slice.iter_mut())
-		{
-		    *x = i as u8;
-		}
-
-		*size = slice.iter().map(|&x| x as usize).sum::<usize>();
-	    }
-
-	    unsafe {
-		super::ffi::alloca_trampoline(size, callback, &mut size as *mut usize as *mut _);
-	    }
-	    size
-	};
-
-	assert_eq!(output, (0..size).sum::<usize>());
-    }
-
-    #[cfg(nightly)]
-    mod bench
-    {
-	const SIZE: usize = 1024;
-	use test::{black_box, Bencher};
-	use std::mem::MaybeUninit;
-
-	#[bench]
-	fn vec_of_uninit_bytes_known(b: &mut Bencher)
-	{
-	    b.iter(|| {
-		black_box(vec![MaybeUninit::<u8>::uninit(); SIZE]);
+/// Allocate a runtime length zeroed byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
+///
+/// See `alloca()`.
+#[inline] pub fn alloca_zeroed<T, F>(size: usize, callback: F) -> T
+where F: FnOnce(&mut [u8]) -> T
+{
+    alloca(size, move |buf| {
+	    // SAFETY: We zero-initialise the backing slice
+	    callback(unsafe {
+		ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len()); // buf.fill(MaybeUninit::zeroed());
+		&mut *(buf as *mut [MaybeUninit<u8>] as *mut [u8]) // MaybeUninit::slice_assume_init_mut()
 	    })
-	}
-	#[bench]
-	fn stackalloc_of_uninit_bytes_known(b: &mut Bencher)
-	{
-	    b.iter(|| {
-		black_box(crate::alloca(SIZE, |b| {black_box(b);}));
-	    })
-	}
-    }
+	})
 }
+
+#[cfg(test)]
+mod tests;
