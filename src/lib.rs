@@ -46,7 +46,7 @@
 //! }); // The slice's elements will be dropped here
 //! # }
 //! ```
-//! # `MaybeUninit`
+//! ## `MaybeUninit`
 //! You can get the aligned stack memory directly with no initialisation.
 //! ```
 //! # use stackalloc::stackalloc_uninit;

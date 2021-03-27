@@ -41,7 +41,7 @@ stackalloc_with(5, || vec![String::from("string"); 10], |slice| {
  assert_eq!(&slice[0][0][..], "string");  
 }); // The slice's elements will be dropped here
 ```
-# `MaybeUninit`
+## `MaybeUninit`
 You can get the aligned stack memory directly with no initialisation.
 ```rust 
 stackalloc_uninit(5, |slice| {
