@@ -14,8 +14,6 @@ The crate works on stable or nightly Rust, but a C99-compliant compiler is requi
 # Examples
 Allocating a byte buffer on the stack.
 ```rust
-# use std::io::{self, Write, Read};
-# use stackalloc::*;
 fn copy_with_buffer<R: Read, W: Write>(mut from: R, mut to: W, bufsize: usize) -> io::Result<usize>
 {
   alloca_zeroed(bufsize, move |buf| -> io::Result<usize> {
@@ -32,29 +30,20 @@ fn copy_with_buffer<R: Read, W: Write>(mut from: R, mut to: W, bufsize: usize) -
 ## Arbitrary types
 Allocating a slice of any type on the stack.
 ```rust
-# use stackalloc::stackalloc;
-# fn _prevent_attempted_execution() {
 stackalloc(5, "str", |slice: &mut [&str]| {
  assert_eq!(&slice[..], &["str"; 5]);
 });
-# }
 ```
 ## Dropping
 The wrapper handles dropping of types that require it.
 ```rust
-# use stackalloc::stackalloc_with;
-# fn _prevent_attempted_execution() {
 stackalloc_with(5, || vec![String::from("string"); 10], |slice| {
  assert_eq!(&slice[0][0][..], "string");  
 }); // The slice's elements will be dropped here
-# }
 ```
 # `MaybeUninit`
 You can get the aligned stack memory directly with no initialisation.
 ```rust 
-# use stackalloc::stackalloc_uninit;
-# use std::mem::MaybeUninit;
-# fn _prevent_attempted_execution() {
 stackalloc_uninit(5, |slice| {
  for s in slice.iter_mut()
  {
@@ -70,7 +59,6 @@ stackalloc_uninit(5, |slice| {
    std::ptr::drop_in_place(slice as *mut [String]);
  }
 });
-# }
 ```
 
 # How does it work?
