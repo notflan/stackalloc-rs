@@ -1,12 +1,13 @@
 [package]
 name = "stackalloc"
 version = "1.0.0"
-description = "allocate arbitrary data on the stack at runtime"
+homepage = "https://git.flanchan.moe/flanchan/stackalloc-rs"
+repository = "https://github.com/notflan/stackalloc-rs"
+keywords = ["alloca", "stack", "stack-allocation", "safe"]
+description = "Safely allocate and manipulate arbitrarily-sized slices on the stack at runtime"
 authors = ["Avril <flanchan@cumallover.me>"]
 edition = "2018"
 license = "MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dev-dependencies]
 lazy_static = "1.4.0"
