@@ -106,7 +106,7 @@ use std::{
     ptr,
 };
 
-//TODO: pub mod avec; pub use avec::AVec;
+pub mod avec; pub use avec::AVec;
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
