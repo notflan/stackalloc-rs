@@ -1,6 +1,89 @@
 //! # Safe runtime stack allocations
 //!
 //! Provides methods for Rust to access and use runtime stack allocated buffers in a safe way.
+//! This is accomplished through a helper function that takes a closure of `FnOnce` that takes the stack allocated buffer slice as a parameter.
+//! The slice is considered to be valid only until this closure returns, at which point the stack is reverted back to the caller of the helper function. If you need a buffer that can be moved, use `Vec` or statically sized arrays.
+//! The memory is allocated on the closure's caller's stack frame, and is deallocated when the caller returns.
+//!
+//! This slice will be properly formed with regards to the expectations safe Rust has on slices.
+//! However, it is still possible to cause a stack overflow by allocating too much memory, so use this sparingly and never allocate unchecked amounts of stack memory blindly.
+//!
+//! # Examples
+//! Allocating a byte buffer on the stack.
+//! ```
+//! # use std::io::{self, Write, Read};
+//! # use stackalloc::*;
+//! fn copy_with_buffer<R: Read, W: Write>(mut from: R, mut to: W, bufsize: usize) -> io::Result<usize>
+//! {
+//!   alloca_zeroed(bufsize, move |buf| -> io::Result<usize> {
+//!    let mut read;
+//!    let mut completed = 0;
+//!    while { read = from.read(&mut buf[..])?; read != 0} {
+//!     to.write_all(&buf[..read])?;
+//!     completed += read;
+//!    }
+//!    Ok(completed)
+//!   })
+//! }
+//! ```
+//! ## Arbitrary types
+//! Allocating a slice of any type on the stack.
+//! ```
+//! # use stackalloc::stackalloc;
+//! # fn _prevent_attempted_execution() {
+//! stackalloc(5, "str", |slice: &mut [&str]| {
+//!  assert_eq!(&slice[..], &["str"; 5]);
+//! });
+//! # }
+//! ```
+//! ## Dropping
+//! The wrapper handles dropping of types that require it.
+//! ```
+//! # use stackalloc::stackalloc_with;
+//! # fn _prevent_attempted_execution() {
+//! stackalloc_with(5, || vec![String::from("string"); 10], |slice| {
+//!  assert_eq!(&slice[0][0][..], "string");  
+//! }); // The slice's elements will be dropped here
+//! # }
+//! ```
+//! # `MaybeUninit`
+//! You can get the aligned stack memory directly with no initialisation.
+//! ```
+//! # use stackalloc::stackalloc_uninit;
+//! # use std::mem::MaybeUninit;
+//! # fn _prevent_attempted_execution() {
+//! stackalloc_uninit(5, |slice| {
+//!  for s in slice.iter_mut()
+//!  {
+//!    *s = MaybeUninit::new(String::new());
+//!  }
+//!  // SAFETY: We have just initialised all elements of the slice.
+//!  let slice = unsafe { stackalloc::helpers::slice_assume_init_mut(slice) };
+//!
+//!  assert_eq!(&slice[..], &vec![String::new(); 5][..]);
+//!
+//!  // SAFETY: We have to manually drop the slice in place to ensure its elements are dropped, as `stackalloc_uninit` does not attempt to drop the potentially uninitialised elements.
+//!  unsafe {
+//!    std::ptr::drop_in_place(slice as *mut [String]);
+//!  }
+//! });
+//! # }
+//! ```
+//!
+//! # Performance
+//! For small (1k or lower) element arrays `stackalloc` can outperform `Vec` by about 50% or more. This performance difference decreases are the amount of memory allocated grows.
+//!
+//! * test tests::bench::stackalloc_of_uninit_bytes_known   ... bench:           3 ns/iter (+/- 0)
+//! * test tests::bench::stackalloc_of_uninit_bytes_unknown ... bench:           3 ns/iter (+/- 0)
+//! * test tests::bench::stackalloc_of_zeroed_bytes_known   ... bench:          22 ns/iter (+/- 0)
+//! * test tests::bench::stackalloc_of_zeroed_bytes_unknown ... bench:          17 ns/iter (+/- 0)
+//! * test tests::bench::vec_of_uninit_bytes_known          ... bench:          13 ns/iter (+/- 0)
+//! * test tests::bench::vec_of_uninit_bytes_unknown        ... bench:          55 ns/iter (+/- 0)
+//! * test tests::bench::vec_of_zeroed_bytes_known          ... bench:          36 ns/iter (+/- 2)
+//! * test tests::bench::vec_of_zeroed_bytes_unknown        ... bench:          37 ns/iter (+/- 0)
+//!
+//! # License
+//! MIT licensed
 
 #![cfg_attr(nightly, feature(test))] 
 
@@ -23,7 +106,7 @@ use std::{
     ptr,
 };
 
-pub mod avec; pub use avec::AVec;
+//TODO: pub mod avec; pub use avec::AVec;
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
@@ -102,16 +185,41 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
     }
 }
 
-#[inline(always)] fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
-{
-    use std::mem::align_of;
-    ((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
+/// A module of helper functions for slice memory manipulation
+///
+/// These are mostly re-implementations of unstable corelib functions in stable Rust.
+pub mod helpers {
+    use super::*;
+    #[inline(always)] pub(crate) fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
+    {
+	use std::mem::align_of;
+	((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
+    }
+
+    /// Convert a slice of `MaybeUninit<T>` to `T`.
+    ///
+    /// This is the same as the unstable core library function `MaybeUninit::slice_assume_init()`
+    ///
+    /// # Safety
+    /// The caller must ensure all elements of `buf` have been initialised before calling this function.
+    #[inline(always)] pub unsafe fn slice_assume_init<T>(buf: & [MaybeUninit<T>]) -> &[T]
+    {
+	& *(buf as *const [MaybeUninit<T>] as *const [T]) // MaybeUninit::slice_assume_init()
+    }
+
+    /// Convert a mutable slice of `MaybeUninit<T>` to `T`.
+    ///
+    /// This is the same as the unstable core library function `MaybeUninit::slice_assume_init_mut()`
+    ///
+    /// # Safety
+    /// The caller must ensure all elements of `buf` have been initialised before calling this function.
+    #[inline(always)] pub unsafe fn slice_assume_init_mut<T>(buf: &mut [MaybeUninit<T>]) -> &mut [T]
+    {
+	&mut *(buf as *mut [MaybeUninit<T>] as *mut [T]) // MaybeUninit::slice_assume_init_mut()
+    }
 }
 
-#[inline(always)] unsafe fn slice_assume_init_mut<T>(buf: &mut [MaybeUninit<T>]) -> &mut [T]
-{
-    &mut *(buf as *mut [MaybeUninit<T>] as *mut [T]) // MaybeUninit::slice_assume_init_mut()
-}
+use helpers::*;
 
 /// Allocate a runtime length zeroed byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
@@ -131,42 +239,52 @@ where F: FnOnce(&mut [u8]) -> T
 
 /// Allocate a runtime length slice of uninitialised `T` on the stack, call `callback` with this buffer, and then deallocate the buffer.
 ///
+/// The slice is aligned to type `T`.
+///
 /// See `alloca()`.
 #[inline] pub fn stackalloc_uninit<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [MaybeUninit<T>]) -> U
 {
     let size_bytes = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
     alloca(size_bytes, move |buf| {
-	let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
-	debug_assert!(buf.as_ptr_range().contains(&(abuf as *const _ as *const MaybeUninit<u8>)));
-	unsafe {
-	    callback(slice::from_raw_parts_mut(abuf, size))
-	}
-    })
+	    let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
+	    debug_assert!(buf.as_ptr_range().contains(&(abuf as *const _ as *const MaybeUninit<u8>)));
+	    unsafe {
+		callback(slice::from_raw_parts_mut(abuf, size))
+	    }
+	})
 }
 
-/// Allocate a runtime length slice of `T` on the stack, fill it by calling `init_with`, call `callback` with this buffer, and then deallocate the buffer.
+/// Allocate a runtime length slice of `T` on the stack, fill it by calling `init_with`, call `callback` with this buffer, and then drop and deallocate the buffer.
+///
+/// The slice is aligned to type `T`.
+///
+/// See `alloca()`.
 #[inline] pub fn stackalloc_with<T, U, F, I>(size: usize, mut init_with: I, callback: F) -> U
 where F: FnOnce(&mut [T]) -> U,
 I: FnMut() -> T
 {
     stackalloc_uninit(size, move |buf| {
-	buf.fill_with(move || MaybeUninit::new(init_with()));
-	// SAFETY: We have initialised the buffer above
-	let buf = unsafe { slice_assume_init_mut(buf) };
-	let ret = callback(buf);
-	if mem::needs_drop::<T>()
-	{
+	    buf.fill_with(move || MaybeUninit::new(init_with()));
 	    // SAFETY: We have initialised the buffer above
-	    unsafe {
-		ptr::drop_in_place(buf as *mut _);
+	    let buf = unsafe { slice_assume_init_mut(buf) };
+	    let ret = callback(buf);
+	    if mem::needs_drop::<T>()
+	    {
+		// SAFETY: We have initialised the buffer above
+		unsafe {
+		    ptr::drop_in_place(buf as *mut _);
+		}
 	    }
-	}
-	ret
-    })
+	    ret
+	})
 }
 
-/// Allocate a runtime length slice of `T` on the stack, fill it by cloning `init`, call `callback` with this buffer, and then deallocate the buffer.
+/// Allocate a runtime length slice of `T` on the stack, fill it by cloning `init`, call `callback` with this buffer, and then drop and deallocate the buffer.
+///
+/// The slice is aligned to type `T`.
+///
+/// See `alloca()`.
 #[inline] pub fn stackalloc<T, U, F>(size: usize, init: T, callback: F) -> U
 where F: FnOnce(&mut [T]) -> U,
 T: Clone
@@ -175,7 +293,11 @@ T: Clone
 }
 
 
-/// Allocate a runtime length slice of `T` on the stack, fill it by calling `T::default()`, call `callback` with this buffer, and then deallocate the buffer.
+/// Allocate a runtime length slice of `T` on the stack, fill it by calling `T::default()`, call `callback` with this buffer, and then drop and deallocate the buffer.
+///
+/// The slice is aligned to type `T`.
+///
+/// See `alloca()`.
 #[inline] pub fn stackalloc_with_default<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [T]) -> U,
 T: Default
