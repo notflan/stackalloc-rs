@@ -1,6 +1,38 @@
 //! Contains tests and benchmarks
 
 #[test]
+fn unknown_size_iter()
+{
+    let iter = 10..;
+    let result: u64 = iter.clone().take(10).sum();
+
+    assert_eq!(result, super::stackalloc_with_iter(10, iter, |buf| buf.iter().copied().sum::<u64>()));
+}
+
+fn unknown_size_iter_len() {
+    assert_eq!(super::stackalloc_with_iter(1024, 0..100, |buf| buf.len()), 100);
+}
+
+#[test]
+fn exact_size_iter()
+{
+    let iter = vec![
+	1,
+	2,
+	13,
+	24,
+	100,
+    ];
+    let len = iter.len();
+    let result: u64 = iter.iter().copied().sum();
+
+    assert_eq!(super::stackalloc_from_iter_exact(iter, |buf| {
+	assert_eq!(buf.len(), len);
+	buf.iter().copied().sum::<u64>()
+    }), result);
+}
+
+#[test]
 #[should_panic]
 fn unwinding_over_boundary()
 {
@@ -149,7 +181,7 @@ mod bench
 	    black_box(crate::alloca(SIZE, |b| {black_box(b);}));
 	})
     }
-    
+
     #[bench]
     fn stackalloc_of_zeroed_bytes_known(b: &mut Bencher)
     {

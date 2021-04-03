@@ -68,8 +68,8 @@ impl<'a, T> Drop for AVec<'a, T>
 		    /*
 		    for x in slice::from_raw_parts_mut(self.inner.stack.buf_ptr, self.fill_ptr())
 		    {
-			std::ptr::drop_in_place(x.as_mut_ptr());
-		    }*/
+		    std::ptr::drop_in_place(x.as_mut_ptr());
+		}*/
 		}
 	    }
 	}
@@ -90,7 +90,7 @@ impl<'a, T> AVec<'a, T>
     /// Have the elements been moved to the heap?
     pub fn is_allocated(&self) -> bool
     {
-	self.fill_ptr() > self.stack_sz
+	self.fill_ptr() >= self.stack_sz
     }
     
     /// Create a new `AVec` with this backing buffer.
@@ -107,6 +107,54 @@ impl<'a, T> AVec<'a, T>
 		}
 	    },
 	    _stack: PhantomData
+	}
+    }
+
+    fn move_to_heap(&mut self)
+    {
+	let buf: Vec<T> = unsafe {
+	    slice::from_raw_parts(self.inner.stack.buf_ptr as *const MaybeUninit<T>, self.fill_ptr()).iter().map(|x| x.as_ptr().read()).collect()
+	};
+	self.inner = Internal {
+	    heap: ManuallyDrop::new(HeapBuffer {
+		_fill_ptr: self.stack_sz,
+		buf,
+	    }),
+	};
+    }
+    
+    /// Insert an element into this `AVec`.
+    pub fn push(&mut self, item: T)
+    {
+	if self.is_allocated()
+	{
+	    unsafe {
+		(*self.inner.heap).buf.push(item)
+	    }
+	} else {
+	    unsafe {
+		let ptr = self.inner.stack.fill_ptr;
+		*self.inner.stack.buf_ptr.add(ptr) = MaybeUninit::new(item);
+		self.inner.stack.fill_ptr += 1;
+
+		if self.is_allocated() {
+		    // Move all items to heap
+		    self.move_to_heap();
+		}
+	    }
+	}
+    }
+
+    /// The number of elements in this `AVec`.
+    pub fn len(&self) -> usize
+    {
+	if self.is_allocated()
+	{
+	    unsafe {
+		self.inner.heap.buf.len()
+	    }
+	} else {
+	    self.fill_ptr()
 	}
     }
 }
