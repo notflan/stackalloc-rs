@@ -16,7 +16,7 @@ fn build_tramp()
 
  	// Not sure if we want these two. We can check the codegen later.
 	// .pic(false)
-	.use_plt(false)
+	// .use_plt(false)
 	
 	.file("alloca_trampoline_.c")
 	.compile("calloca_trampoline");
