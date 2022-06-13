@@ -92,7 +92,7 @@
 
 #![cfg_attr(all(feature = "no_std", not(test)), no_std)]
 
-#[cfg(all(nightly, not(feature = "no_std"), not(test)))] extern crate test;
+#[cfg(all(nightly, test))] extern crate test;
 
 #[allow(unused)]
 use core::{
