@@ -86,7 +86,7 @@
 //! MIT licensed
 
 
-#![cfg_attr(all(nightly, not(feature = "no_std")), feature(test))] 
+#![cfg_attr(all(nightly, test), feature(test))] 
 
 #![allow(dead_code)]
 
