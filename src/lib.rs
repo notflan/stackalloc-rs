@@ -85,13 +85,17 @@
 //! # License
 //! MIT licensed
 
-#![cfg_attr(nightly, feature(test))] 
+
+#![cfg_attr(all(nightly, not(feature = "no_std")), feature(test))] 
 
 #![allow(dead_code)]
 
-#[cfg(nightly)] extern crate test;
+#![cfg_attr(all(feature = "no_std", not(test)), no_std)]
 
-use std::{
+#[cfg(all(nightly, not(feature = "no_std"), not(test)))] extern crate test;
+
+#[allow(unused)]
+use core::{
     mem::{
 	self,
 	MaybeUninit,
@@ -106,7 +110,13 @@ use std::{
     ptr,
 };
 
-pub mod avec; pub use avec::AVec;
+#[cfg(test)]
+mod tests;
+
+#[cfg(not(feature = "no_std"))]
+pub mod avec;
+#[cfg(not(feature = "no_std"))]
+pub use avec::AVec;
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
@@ -157,7 +167,15 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 	unsafe {
 	    let slice = slice::from_raw_parts_mut(allocad_ptr as *mut MaybeUninit<u8>, size);
 	    let callback = ManuallyDrop::take(&mut callback);
-	    rval = MaybeUninit::new(panic::catch_unwind(AssertUnwindSafe(move || callback(slice))));
+
+        #[cfg(feature = "no_std")]
+	    {
+            rval = MaybeUninit::new(callback(slice));
+        }
+        #[cfg(not(feature = "no_std"))]
+        {
+            rval = MaybeUninit::new(std::panic::catch_unwind(AssertUnwindSafe(move || callback(slice))));
+        }
 	}
     };
 
@@ -177,12 +195,18 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 	ffi::alloca_trampoline(size, create_trampoline(&callback), &mut callback as *mut _ as *mut c_void);
 	rval.assume_init()
     };
-    
-    match rval
+    #[cfg(feature = "no_std")]
     {
-	Ok(v) => v,
-	Err(pan) => panic::resume_unwind(pan),
+        return rval
     }
+    #[cfg(not(feature = "no_std"))]
+    {
+        match rval {
+            Ok(v) => v,
+            Err(pan) => std::panic::resume_unwind(pan),
+        }
+    }
+
 }
 
 /// A module of helper functions for slice memory manipulation
@@ -192,7 +216,7 @@ pub mod helpers {
     use super::*;
     #[inline(always)] pub(crate) fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
     {
-	use std::mem::align_of;
+	use core::mem::align_of;
 	((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
     }
 
@@ -245,7 +269,7 @@ where F: FnOnce(&mut [u8]) -> T
 #[inline] pub fn stackalloc_uninit<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [MaybeUninit<T>]) -> U
 {
-    let size_bytes = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
+    let size_bytes = (core::mem::size_of::<T>() * size) + core::mem::align_of::<T>();
     alloca(size_bytes, move |buf| {
 	let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
 	debug_assert!(buf.as_ptr_range().contains(&(abuf as *const _ as *const MaybeUninit<u8>)));
@@ -379,5 +403,4 @@ where F: FnOnce(&mut [T]) -> U,
 }
 
 
-#[cfg(test)]
-mod tests;
+
