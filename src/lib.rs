@@ -85,12 +85,13 @@
 //! # License
 //! MIT licensed
 
-
-#![cfg_attr(all(nightly, test), feature(test))] 
+#![cfg_attr(nightly, feature(test))] 
 
 #![allow(dead_code)]
 
+
 #![cfg_attr(all(feature = "no_std", not(test)), no_std)]
+#![cfg_attr(all(feature = "no_std"), feature(core_intrinsics))]
 
 #[cfg(all(nightly, test))] extern crate test;
 
@@ -110,13 +111,7 @@ use core::{
     ptr,
 };
 
-#[cfg(test)]
-mod tests;
-
-#[cfg(not(feature = "no_std"))]
-pub mod avec;
-#[cfg(not(feature = "no_std"))]
-pub use avec::AVec;
+pub mod avec; pub use avec::AVec;
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
@@ -170,7 +165,7 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 
         #[cfg(feature = "no_std")]
 	    {
-            rval = MaybeUninit::new(callback(slice));
+            rval = MaybeUninit::new(catch_unwind(move||{callback(slice)}));
         }
         #[cfg(not(feature = "no_std"))]
         {
@@ -192,21 +187,62 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
     }
 
     let rval = unsafe {
-	ffi::alloca_trampoline(size, create_trampoline(&callback), &mut callback as *mut _ as *mut c_void);
-	rval.assume_init()
+        ffi::alloca_trampoline(size, create_trampoline(&callback), &mut callback as *mut _ as *mut c_void);
+        rval.assume_init()
     };
-    #[cfg(feature = "no_std")]
-    {
-        return rval
-    }
+    
     #[cfg(not(feature = "no_std"))]
+    match rval
     {
-        match rval {
-            Ok(v) => v,
-            Err(pan) => std::panic::resume_unwind(pan),
+        Ok(v) => v,
+        Err(pan) => std::panic::resume_unwind(pan),
+    }
+    #[cfg(feature = "no_std")]
+    return match rval{
+        Ok(v) => v,
+        Err(()) => core::panic!(),
+    }
+}
+
+
+
+#[cfg(feature = "no_std")]
+unsafe fn catch_unwind<R, F: FnOnce() -> R>(f: F) -> Result<R, ()>{
+    
+    union Data<F, R> {
+        f: ManuallyDrop<F>,
+        r: ManuallyDrop<R>,
+        p: (),
+    }
+    
+    #[inline]
+    fn do_call<F: FnOnce() -> R, R>(data: *mut u8) {
+        unsafe {
+            let data = data as *mut Data<F, R>;
+            let data = &mut (*data);
+            let f = ManuallyDrop::take(&mut data.f);
+            data.r = ManuallyDrop::new(f());
         }
     }
 
+    #[inline]
+    fn do_catch<F: FnOnce() -> R, R>(data: *mut u8, _payload: *mut u8) {
+        unsafe {
+            let data = data as *mut Data<F, R>;
+            let data = &mut (*data);
+            data.p = ()
+        }
+    }
+
+    let mut data = Data { f: ManuallyDrop::new(f) };
+    let data_ptr = &mut data as *mut _ as *mut u8;
+
+    
+    if core::intrinsics::r#try(do_call::<F, R>, data_ptr, do_catch::<F, R>) == 0{
+        Result::Ok(ManuallyDrop::into_inner(data.r))
+    }else{
+        Result::Err(())
+    }
 }
 
 /// A module of helper functions for slice memory manipulation
@@ -403,4 +439,5 @@ where F: FnOnce(&mut [T]) -> U,
 }
 
 
-
+#[cfg(test)]
+mod tests;
