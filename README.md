@@ -11,6 +11,9 @@ However, it is still possible to cause a stack overflow by allocating too much m
 # Requirements
 The crate works on stable or nightly Rust, but a C99-compliant compiler is required to build.
 
+# Features
+ * `no_std` - Enabled `no_std` support on nightly toolchains.
+
 # Examples
 Allocating a byte buffer on the stack.
 ```rust

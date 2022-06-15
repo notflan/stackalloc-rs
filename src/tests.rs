@@ -32,6 +32,7 @@ fn exact_size_iter()
     }), result);
 }
 
+#[cfg(all(nightly, not(feature="no_std")))] // XXX: process will abort on no_std. This is expected, but won't "pass" this test.
 #[test]
 #[should_panic]
 fn unwinding_over_boundary()

@@ -91,7 +91,9 @@
 
 
 #![cfg_attr(all(feature = "no_std", not(test)), no_std)]
-#![cfg_attr(all(feature = "no_std"), feature(core_intrinsics))]
+#![cfg_attr(all(feature = "no_std", not(feature="no_unwind_protection")), feature(core_intrinsics))]
+
+// NOTE: This feature `no_unwind_protection` doesn't actually exist at the moment; since a binary crate built with #![no_std] will not be using a stable compiler toolchain. It was just for testing.
 
 #[cfg(all(nightly, test))] extern crate test;
 
@@ -111,7 +113,12 @@ use core::{
     ptr,
 };
 
-pub mod avec; pub use avec::AVec;
+
+#[cfg(not(feature = "no_std"))]
+pub mod avec;
+#[cfg(not(feature = "no_std"))]
+pub use avec::AVec;
+
 mod ffi;
 
 /// Allocate a runtime length uninitialised byte buffer on the stack, call `callback` with this buffer, and then deallocate the buffer.
@@ -206,7 +213,14 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 
 
 
-#[cfg(feature = "no_std")]
+
+#[cfg(all(feature = "no_std", feature = "no_unwind_protection"))] 
+unsafe fn catch_unwind<R, F: FnOnce() -> R>(f: F) -> Result<R, ()> {
+    // Catching unwinds disabled for this build for now since it requires core intrinsics.
+    Ok(f())
+}
+
+#[cfg(all(feature = "no_std", not(feature = "no_unwind_protection")))]
 unsafe fn catch_unwind<R, F: FnOnce() -> R>(f: F) -> Result<R, ()>{
     
     union Data<F, R> {
