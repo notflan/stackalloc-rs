@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use core::ffi::c_void;
 
 pub type CallbackRaw = unsafe extern "C" fn (ptr: *mut c_void, data: *mut c_void)->();
 

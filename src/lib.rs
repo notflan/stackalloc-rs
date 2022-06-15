@@ -89,9 +89,14 @@
 
 #![allow(dead_code)]
 
-#[cfg(nightly)] extern crate test;
 
-use std::{
+#![cfg_attr(all(feature = "no_std", not(test)), no_std)]
+#![cfg_attr(all(feature = "no_std"), feature(core_intrinsics))]
+
+#[cfg(all(nightly, test))] extern crate test;
+
+#[allow(unused)]
+use core::{
     mem::{
 	self,
 	MaybeUninit,
@@ -157,7 +162,15 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
 	unsafe {
 	    let slice = slice::from_raw_parts_mut(allocad_ptr as *mut MaybeUninit<u8>, size);
 	    let callback = ManuallyDrop::take(&mut callback);
-	    rval = MaybeUninit::new(panic::catch_unwind(AssertUnwindSafe(move || callback(slice))));
+
+        #[cfg(feature = "no_std")]
+	    {
+            rval = MaybeUninit::new(catch_unwind(move||{callback(slice)}));
+        }
+        #[cfg(not(feature = "no_std"))]
+        {
+            rval = MaybeUninit::new(std::panic::catch_unwind(AssertUnwindSafe(move || callback(slice))));
+        }
 	}
     };
 
@@ -174,14 +187,61 @@ where F: FnOnce(&mut [MaybeUninit<u8>]) -> T
     }
 
     let rval = unsafe {
-	ffi::alloca_trampoline(size, create_trampoline(&callback), &mut callback as *mut _ as *mut c_void);
-	rval.assume_init()
+        ffi::alloca_trampoline(size, create_trampoline(&callback), &mut callback as *mut _ as *mut c_void);
+        rval.assume_init()
     };
     
+    #[cfg(not(feature = "no_std"))]
     match rval
     {
-	Ok(v) => v,
-	Err(pan) => panic::resume_unwind(pan),
+        Ok(v) => v,
+        Err(pan) => std::panic::resume_unwind(pan),
+    }
+    #[cfg(feature = "no_std")]
+    return match rval{
+        Ok(v) => v,
+        Err(()) => core::panic!(),
+    }
+}
+
+
+
+#[cfg(feature = "no_std")]
+unsafe fn catch_unwind<R, F: FnOnce() -> R>(f: F) -> Result<R, ()>{
+    
+    union Data<F, R> {
+        f: ManuallyDrop<F>,
+        r: ManuallyDrop<R>,
+        p: (),
+    }
+    
+    #[inline]
+    fn do_call<F: FnOnce() -> R, R>(data: *mut u8) {
+        unsafe {
+            let data = data as *mut Data<F, R>;
+            let data = &mut (*data);
+            let f = ManuallyDrop::take(&mut data.f);
+            data.r = ManuallyDrop::new(f());
+        }
+    }
+
+    #[inline]
+    fn do_catch<F: FnOnce() -> R, R>(data: *mut u8, _payload: *mut u8) {
+        unsafe {
+            let data = data as *mut Data<F, R>;
+            let data = &mut (*data);
+            data.p = ()
+        }
+    }
+
+    let mut data = Data { f: ManuallyDrop::new(f) };
+    let data_ptr = &mut data as *mut _ as *mut u8;
+
+    
+    if core::intrinsics::r#try(do_call::<F, R>, data_ptr, do_catch::<F, R>) == 0{
+        Result::Ok(ManuallyDrop::into_inner(data.r))
+    }else{
+        Result::Err(())
     }
 }
 
@@ -192,7 +252,7 @@ pub mod helpers {
     use super::*;
     #[inline(always)] pub(crate) fn align_buffer_to<T>(ptr: *mut u8) -> *mut T
     {
-	use std::mem::align_of;
+	use core::mem::align_of;
 	((ptr as usize) + align_of::<T>() - (ptr as usize) % align_of::<T>()) as *mut T
     }
 
@@ -245,7 +305,7 @@ where F: FnOnce(&mut [u8]) -> T
 #[inline] pub fn stackalloc_uninit<T, U, F>(size: usize, callback: F) -> U
 where F: FnOnce(&mut [MaybeUninit<T>]) -> U
 {
-    let size_bytes = (std::mem::size_of::<T>() * size) + std::mem::align_of::<T>();
+    let size_bytes = (core::mem::size_of::<T>() * size) + core::mem::align_of::<T>();
     alloca(size_bytes, move |buf| {
 	let abuf = align_buffer_to::<MaybeUninit<T>>(buf.as_mut_ptr() as *mut u8);
 	debug_assert!(buf.as_ptr_range().contains(&(abuf as *const _ as *const MaybeUninit<u8>)));
