@@ -95,6 +95,8 @@
 
 // NOTE: This feature `no_unwind_protection` doesn't actually exist at the moment; since a binary crate built with #![no_std] will not be using a stable compiler toolchain. It was just for testing.
 
+// TODO: Some wrapping stackalloc functions (`stackalloc_with()`, `stackalloc_with_iter()`) can leak memory when user-provided closure panics. This does not violate memory safety, but we can prevent it by adding a shim type for `slice_assume_init_mut()` that impls `DerefMut<[T]>` and `Drop`; which, in its drop method calls the `ptr::drop_in_place(ptr_mut as [_])` so it is dropped on exit automatically (and on panic.) This will also remove code duplication of `unsafe { ptr::drop_in_place(...) }` at the end of `alloca()/stackalloc_uninit()` wrapper allocation functions too.
+
 #[cfg(all(nightly, test))] extern crate test;
 
 #[allow(unused)]
@@ -149,6 +151,10 @@ mod ffi;
 ///
 /// ## Cleanup
 /// Immediately after the closure exits, the stack pointer is reset, effectively freeing the buffer. The pointer used for the creation of the slice is invalidated as soon as the closure exits. But in the absense of `unsafe` inside the closure, it isn't possible to keep this pointer around after the frame is destroyed.
+///
+/// **XXX**: If the closure panics inside a function that pre-initialises the buffer (e.g.
+/// `stackalloc_with()`,) the buffer's initialised elements may not be dropped and may cause a
+/// resource leak. (TODO: This will be fixed in the next version.)
 ///
 /// ## Panics
 /// The closure can panic and it will be caught and propagated after exiting the FFI boundary and resetting the stack pointer.
@@ -252,7 +258,7 @@ unsafe fn catch_unwind<R, F: FnOnce() -> R>(f: F) -> Result<R, ()>{
     let data_ptr = &mut data as *mut _ as *mut u8;
 
     
-    if core::intrinsics::catch_unwind(do_call::<F, R>, data_ptr, do_catch::<F, R>) == 0{
+    if !core::intrinsics::catch_unwind(do_call::<F, R>, data_ptr, do_catch::<F, R>) {
         Result::Ok(ManuallyDrop::into_inner(data.r))
     }else{
         Result::Err(())
